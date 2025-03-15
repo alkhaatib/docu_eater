@@ -15,65 +15,88 @@ import {
   Chip,
   LinearProgress,
   ListItemIcon,
+  Alert,
+  Button,
 } from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import FolderIcon from '@mui/icons-material/Folder';
 import DescriptionIcon from '@mui/icons-material/Description';
-
-// Mock data - in a real app, this would come from an API
-const getMockTaskDetail = (id: string) => ({
-  id,
-  url: 'https://docs.python.org',
-  startTime: '2023-03-10T08:30:00',
-  endTime: '2023-03-10T09:45:00',
-  status: 'completed',
-  pagesIndexed: 243,
-  maxPages: 300,
-  errorCount: 2,
-  crawlDepth: 4,
-  crawlType: 'breadth',
-  documentMap: {
-    id: 'root',
-    name: 'Python Documentation',
-    children: [
-      {
-        id: '1',
-        name: 'Getting Started',
-        children: [
-          { id: '1.1', name: 'Installation', children: [] },
-          { id: '1.2', name: 'First Steps', children: [] },
-        ],
-      },
-      {
-        id: '2',
-        name: 'Language Reference',
-        children: [
-          { id: '2.1', name: 'Lexical Analysis', children: [] },
-          { id: '2.2', name: 'Data Model', children: [] },
-        ],
-      },
-    ],
-  },
-  recentPages: [
-    { url: 'https://docs.python.org/tutorial/index.html', title: 'Tutorial' },
-    { url: 'https://docs.python.org/reference/index.html', title: 'Language Reference' },
-    { url: 'https://docs.python.org/library/index.html', title: 'Library Reference' },
-  ],
-});
+import { Link as RouterLink } from 'react-router-dom';
+import { ApiService } from '../services/api';
+import { CrawlTask, DocMap } from '../types';
 
 const TaskDetailPage: React.FC = () => {
   const { taskId } = useParams<{ taskId: string }>();
-  const [task, setTask] = useState<any>(null);
+  const [task, setTask] = useState<CrawlTask | null>(null);
+  const [docMap, setDocMap] = useState<DocMap | null>(null);
   const [loading, setLoading] = useState(true);
+  const [docMapLoading, setDocMapLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [docMapError, setDocMapError] = useState<string | null>(null);
+
+  // Polling interval for task status (in ms)
+  const POLL_INTERVAL = 3000;
 
   useEffect(() => {
-    // Simulating API call
-    setTimeout(() => {
-      setTask(getMockTaskDetail(taskId || '0'));
+    if (!taskId) {
+      setError('Task ID is missing.');
       setLoading(false);
-    }, 500);
-  }, [taskId]);
+      return;
+    }
 
-  const renderDocumentTree = (node: any, level = 0) => {
+    let intervalId: NodeJS.Timeout;
+
+    const fetchTaskStatus = async () => {
+      try {
+        const taskData = await ApiService.getCrawlStatus(taskId);
+        setTask(taskData);
+
+        // If task is completed, try to fetch the documentation map
+        if (taskData.status === 'completed' && !docMap && !docMapLoading) {
+          fetchDocMap();
+        }
+
+        // If task is in a final state (completed or failed), stop polling
+        if (taskData.status === 'completed' || taskData.status === 'failed') {
+          clearInterval(intervalId);
+        }
+      } catch (err) {
+        console.error('Error fetching task status:', err);
+        setError('Failed to load task. Please try again later.');
+        clearInterval(intervalId);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Fetch initially
+    fetchTaskStatus();
+
+    // Set up polling
+    intervalId = setInterval(fetchTaskStatus, POLL_INTERVAL);
+
+    // Clean up on unmount
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [taskId, docMap, docMapLoading]);
+
+  const fetchDocMap = async () => {
+    if (!taskId) return;
+
+    try {
+      setDocMapLoading(true);
+      const docMapData = await ApiService.getDocMap(taskId);
+      setDocMap(docMapData);
+    } catch (err) {
+      console.error('Error fetching doc map:', err);
+      setDocMapError('Failed to load documentation map.');
+    } finally {
+      setDocMapLoading(false);
+    }
+  };
+
+  const renderDocumentTree = (node: DocMap, level = 0) => {
     const isFolder = node.children && node.children.length > 0;
     
     return (
@@ -82,15 +105,50 @@ const TaskDetailPage: React.FC = () => {
           <ListItemIcon>
             {isFolder ? <FolderIcon color="primary" /> : <DescriptionIcon color="info" />}
           </ListItemIcon>
-          <ListItemText primary={node.name} />
+          <ListItemText 
+            primary={node.name} 
+            secondary={node.url}
+            primaryTypographyProps={{ fontWeight: isFolder ? 'bold' : 'normal' }}
+          />
         </ListItem>
-        {isFolder && node.children.map((child: any) => renderDocumentTree(child, level + 1))}
+        {isFolder && node.children.map((child) => renderDocumentTree(child, level + 1))}
       </React.Fragment>
     );
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleString();
+  };
+
+  const getStatusChip = (status: string) => {
+    let color: 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning';
+    
+    switch (status) {
+      case 'completed':
+        color = 'success';
+        break;
+      case 'crawling':
+      case 'processing':
+        color = 'info';
+        break;
+      case 'failed':
+        color = 'error';
+        break;
+      case 'queued':
+        color = 'warning';
+        break;
+      default:
+        color = 'default';
+    }
+    
+    return (
+      <Chip
+        label={status.replace('_', ' ')}
+        color={color}
+        size="small"
+      />
+    );
   };
 
   if (loading) {
@@ -106,6 +164,25 @@ const TaskDetailPage: React.FC = () => {
     );
   }
 
+  if (error) {
+    return (
+      <Container maxWidth="lg">
+        <Box sx={{ mt: 4, mb: 4 }}>
+          <Alert severity="error">{error}</Alert>
+          <Box sx={{ mt: 2 }}>
+            <Button
+              component={RouterLink}
+              to="/tasks"
+              startIcon={<ArrowBackIcon />}
+            >
+              Back to Tasks
+            </Button>
+          </Box>
+        </Box>
+      </Container>
+    );
+  }
+
   if (!task) {
     return (
       <Container maxWidth="lg">
@@ -113,6 +190,15 @@ const TaskDetailPage: React.FC = () => {
           <Typography variant="h5" color="error">
             Task not found
           </Typography>
+          <Box sx={{ mt: 2 }}>
+            <Button
+              component={RouterLink}
+              to="/tasks"
+              startIcon={<ArrowBackIcon />}
+            >
+              Back to Tasks
+            </Button>
+          </Box>
         </Box>
       </Container>
     );
@@ -121,9 +207,19 @@ const TaskDetailPage: React.FC = () => {
   return (
     <Container maxWidth="lg">
       <Box sx={{ mt: 4, mb: 4 }}>
-        <Typography variant="h4" gutterBottom>
-          Task Detail: {task.id}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+          <Button
+            component={RouterLink}
+            to="/tasks"
+            startIcon={<ArrowBackIcon />}
+            sx={{ mr: 2 }}
+          >
+            Back
+          </Button>
+          <Typography variant="h4">
+            Task Detail: {taskId}
+          </Typography>
+        </Box>
 
         <Grid container spacing={4}>
           <Grid item xs={12} md={4}>
@@ -140,40 +236,46 @@ const TaskDetailPage: React.FC = () => {
                   <ListItem>
                     <ListItemText
                       primary="Status"
-                      secondary={
-                        <Chip
-                          label={task.status}
-                          color={task.status === 'completed' ? 'success' : 'default'}
-                          size="small"
-                          sx={{ mt: 1 }}
-                        />
-                      }
+                      secondary={getStatusChip(task.status)}
                     />
                   </ListItem>
                   <Divider />
                   <ListItem>
-                    <ListItemText primary="Start Time" secondary={formatDate(task.startTime)} />
+                    <ListItemText primary="Start Time" secondary={formatDate(task.start_time)} />
                   </ListItem>
                   <Divider />
                   <ListItem>
-                    <ListItemText primary="End Time" secondary={formatDate(task.endTime)} />
+                    <ListItemText primary="End Time" secondary={formatDate(task.end_time)} />
                   </ListItem>
                   <Divider />
                   <ListItem>
-                    <ListItemText primary="Pages Indexed" secondary={`${task.pagesIndexed} / ${task.maxPages}`} />
+                    <ListItemText 
+                      primary="Pages Indexed" 
+                      secondary={task.stats 
+                        ? `${task.stats.pages_indexed || 0} / ${task.stats.max_pages || 'unlimited'}`
+                        : 'N/A'
+                      } 
+                    />
                   </ListItem>
                   <Divider />
                   <ListItem>
-                    <ListItemText primary="Errors" secondary={task.errorCount} />
+                    <ListItemText 
+                      primary="Errors" 
+                      secondary={task.stats?.errors !== undefined ? task.stats.errors : 'N/A'} 
+                    />
                   </ListItem>
-                  <Divider />
-                  <ListItem>
-                    <ListItemText primary="Crawl Depth" secondary={task.crawlDepth} />
-                  </ListItem>
-                  <Divider />
-                  <ListItem>
-                    <ListItemText primary="Crawl Strategy" secondary={task.crawlType} />
-                  </ListItem>
+                  {task.error && (
+                    <>
+                      <Divider />
+                      <ListItem>
+                        <ListItemText 
+                          primary="Error Message" 
+                          secondary={task.error}
+                          secondaryTypographyProps={{ color: 'error' }}
+                        />
+                      </ListItem>
+                    </>
+                  )}
                 </List>
               </CardContent>
             </Card>
@@ -184,31 +286,35 @@ const TaskDetailPage: React.FC = () => {
               <Typography variant="h6" gutterBottom>
                 Documentation Map
               </Typography>
-              <Box sx={{ mt: 2 }}>
-                <List dense>
-                  {renderDocumentTree(task.documentMap)}
-                </List>
-              </Box>
-            </Paper>
-
-            <Paper sx={{ p: 3 }}>
-              <Typography variant="h6" gutterBottom>
-                Recently Indexed Pages
-              </Typography>
-              <List>
-                {task.recentPages.map((page: any, index: number) => (
-                  <React.Fragment key={index}>
-                    <ListItem>
-                      <ListItemText
-                        primary={page.title}
-                        secondary={page.url}
-                        primaryTypographyProps={{ fontWeight: 'medium' }}
-                      />
-                    </ListItem>
-                    {index < task.recentPages.length - 1 && <Divider />}
-                  </React.Fragment>
-                ))}
-              </List>
+              
+              {docMapLoading && (
+                <Box sx={{ mt: 2 }}>
+                  <LinearProgress />
+                  <Typography variant="body2" sx={{ mt: 1 }}>
+                    Loading documentation map...
+                  </Typography>
+                </Box>
+              )}
+              
+              {docMapError && (
+                <Alert severity="error" sx={{ mt: 2 }}>
+                  {docMapError}
+                </Alert>
+              )}
+              
+              {docMap && (
+                <Box sx={{ mt: 2 }}>
+                  <List dense>
+                    {renderDocumentTree(docMap)}
+                  </List>
+                </Box>
+              )}
+              
+              {!docMap && !docMapLoading && !docMapError && task.status !== 'completed' && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  Documentation map will be available once the crawl is completed.
+                </Alert>
+              )}
             </Paper>
           </Grid>
         </Grid>

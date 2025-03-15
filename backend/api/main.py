@@ -87,16 +87,10 @@ def kill_processes_on_port(port: int, force: bool = True):
 PORT = 8000
 kill_processes_on_port(PORT)
 
-# Try importing real crawler or use mock
-try:
-    from crawler.crawler import DocumentCrawler, CrawlRequest, CrawlResult, DocMap
-    from crawler.doc_mapper import DocumentMapper
-    USING_MOCK = False
-    print("Using real crawler implementation")
-except ImportError:
-    print("Using mock crawler implementation")
-    from crawler.mock_crawler import DocumentCrawler, CrawlRequest, CrawlResult, DocMap, DocumentMapper
-    USING_MOCK = True
+# Import the real crawler components
+from crawler.crawler import DocumentCrawler, CrawlRequest, CrawlResult
+from crawler.doc_mapper import DocumentMapper, DocMap
+print("Using real crawler implementation")
 
 # Create the FastAPI app
 app = FastAPI(
@@ -270,6 +264,12 @@ async def perform_crawl(task_id: str, request: CrawlRequest):
         # Update task status
         crawl_tasks[task_id]["status"] = "completed"
         crawl_tasks[task_id]["stats"] = crawl_result.crawl_stats
+        
+        # Ensure pages_indexed is set in stats
+        if "stats" in crawl_tasks[task_id] and "total_pages" in crawl_tasks[task_id]["stats"]:
+            if "pages_indexed" not in crawl_tasks[task_id]["stats"]:
+                crawl_tasks[task_id]["stats"]["pages_indexed"] = crawl_tasks[task_id]["stats"]["total_pages"]
+        
         crawl_tasks[task_id]["end_time"] = time.time()
         crawl_tasks[task_id]["duration"] = time.time() - start_time
         
@@ -477,9 +477,106 @@ async def get_doc_map(task_id: str):
         raise HTTPException(status_code=404, detail=f"Documentation map not found for task {task_id}")
     
     with open(doc_map_path, "r") as f:
-        doc_map = json.load(f)
+        doc_map_data = json.load(f)
     
-    return doc_map 
+    # Transform the backend DocMap format to the frontend's expected format
+    frontend_doc_map = transform_doc_map_for_frontend(doc_map_data)
+    
+    return frontend_doc_map
+
+def transform_doc_map_for_frontend(doc_map_data):
+    """
+    Transform the backend DocMap format to the frontend's expected format.
+    
+    Args:
+        doc_map_data: DocMap data from the backend.
+        
+    Returns:
+        DocMap data in the format expected by the frontend.
+    """
+    # Create the root node
+    root_node = {
+        "id": "root",
+        "name": "Documentation",
+        "url": doc_map_data.get("url", ""),
+        "children": []
+    }
+    
+    # Add sections as children
+    for index, section in enumerate(doc_map_data.get("sections", [])):
+        section_id = f"section-{index}"
+        section_node = {
+            "id": section_id,
+            "name": section.get("title", "Unnamed Section"),
+            "url": section.get("url", ""),
+            "children": []
+        }
+        
+        # Add pages for this section
+        for page_url in section.get("pages", []):
+            # Find the page details
+            page_details = None
+            for page in doc_map_data.get("pages", []):
+                if page.get("url") == page_url:
+                    page_details = page
+                    break
+            
+            if page_details:
+                page_id = f"page-{len(section_node['children'])}"
+                page_node = {
+                    "id": page_id,
+                    "name": page_details.get("title", "Unnamed Page"),
+                    "url": page_url,
+                    "children": []
+                }
+                section_node["children"].append(page_node)
+        
+        # Add subsections
+        for sub_index, subsection in enumerate(section.get("subsections", [])):
+            subsection_id = f"{section_id}-sub-{sub_index}"
+            subsection_node = {
+                "id": subsection_id,
+                "name": subsection.get("title", "Unnamed Subsection"),
+                "url": subsection.get("url", ""),
+                "children": []
+            }
+            
+            # Add pages for this subsection
+            for page_url in subsection.get("pages", []):
+                # Find the page details
+                page_details = None
+                for page in doc_map_data.get("pages", []):
+                    if page.get("url") == page_url:
+                        page_details = page
+                        break
+                
+                if page_details:
+                    page_id = f"{subsection_id}-page-{len(subsection_node['children'])}"
+                    page_node = {
+                        "id": page_id,
+                        "name": page_details.get("title", "Unnamed Page"),
+                        "url": page_url,
+                        "children": []
+                    }
+                    subsection_node["children"].append(page_node)
+            
+            section_node["children"].append(subsection_node)
+        
+        root_node["children"].append(section_node)
+    
+    # If there are no sections, add pages directly to the root
+    if not root_node["children"] and doc_map_data.get("pages"):
+        for page_index, page in enumerate(doc_map_data.get("pages", [])):
+            page_id = f"page-{page_index}"
+            page_node = {
+                "id": page_id,
+                "name": page.get("title", "Unnamed Page"),
+                "url": page.get("url", ""),
+                "children": []
+            }
+            root_node["children"].append(page_node)
+    
+    return root_node
 
 @app.get("/api/tasks", response_model=List[Task])
 async def get_tasks():
@@ -575,21 +672,24 @@ async def create_task(task: CrawlTask, background_tasks: BackgroundTasks):
     
     # Create task data
     task_data = {
-        "id": task_id,
+        "task_id": task_id,
         "url": task.url,
         "status": "pending",
         "start_time": time.time(),
-        "request": request.dict()
+        "request": request.model_dump()
     }
     
-    # Save task
+    # Store the task in memory
+    crawl_tasks[task_id] = task_data
+    
+    # Save task metadata
     save_task_metadata(task_id)
     
     # Start background task
     background_tasks.add_task(perform_crawl, task_id, request)
     
     # Return status
-    return get_crawl_status(task_id)
+    return await get_crawl_status(task_id)
 
 @app.get("/api/tasks/{task_id}", response_model=CrawlStatus)
 def get_task_status(task_id: str):

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Container,
   Typography,
@@ -13,38 +13,38 @@ import {
   Chip,
   Button,
   Tooltip,
+  LinearProgress,
+  Alert,
 } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
-
-// Mock data - in a real app, this would come from an API
-const mockTasks = [
-  {
-    id: '1',
-    url: 'https://docs.python.org',
-    startTime: '2023-03-10T08:30:00',
-    status: 'completed',
-    pagesIndexed: 243,
-    maxPages: 300,
-  },
-  {
-    id: '2',
-    url: 'https://reactjs.org/docs',
-    startTime: '2023-03-12T14:15:00',
-    status: 'in_progress',
-    pagesIndexed: 56,
-    maxPages: 200,
-  },
-  {
-    id: '3',
-    url: 'https://docs.docker.com',
-    startTime: '2023-03-14T10:45:00',
-    status: 'failed',
-    pagesIndexed: 12,
-    maxPages: 150,
-  },
-];
+import AddIcon from '@mui/icons-material/Add';
+import { ApiService } from '../services/api';
+import { CrawlTask } from '../types';
 
 const TasksPage: React.FC = () => {
+  const [tasks, setTasks] = useState<CrawlTask[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Function to fetch tasks
+  const fetchTasks = async () => {
+    try {
+      setLoading(true);
+      const tasksData = await ApiService.getAllTasks();
+      setTasks(tasksData);
+    } catch (err) {
+      console.error('Error fetching tasks:', err);
+      setError('Failed to load tasks. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch tasks on component mount
+  useEffect(() => {
+    fetchTasks();
+  }, []);
+
   const getStatusChip = (status: string) => {
     let color:
       | 'default'
@@ -59,11 +59,15 @@ const TasksPage: React.FC = () => {
       case 'completed':
         color = 'success';
         break;
+      case 'crawling':
       case 'in_progress':
         color = 'info';
         break;
       case 'failed':
         color = 'error';
+        break;
+      case 'queued':
+        color = 'warning';
         break;
       default:
         color = 'default';
@@ -78,29 +82,43 @@ const TasksPage: React.FC = () => {
     );
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleString();
   };
 
   return (
     <Container maxWidth="lg">
       <Box sx={{ mt: 4, mb: 4 }}>
-        <Typography variant="h4" gutterBottom>
-          Crawl Tasks
-        </Typography>
-        
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+          <Typography variant="h4">Crawl Tasks</Typography>
           <Button
             component={RouterLink}
             to="/new-crawl"
             variant="contained"
             color="primary"
+            startIcon={<AddIcon />}
           >
             New Crawl
           </Button>
         </Box>
         
+        {error && (
+          <Alert severity="error" sx={{ mb: 3 }}>
+            {error}
+            <Button 
+              onClick={fetchTasks} 
+              color="inherit" 
+              size="small" 
+              sx={{ ml: 2 }}
+            >
+              Retry
+            </Button>
+          </Alert>
+        )}
+        
         <TableContainer component={Paper}>
+          {loading && <LinearProgress />}
           <Table>
             <TableHead>
               <TableRow>
@@ -113,21 +131,30 @@ const TasksPage: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {mockTasks.map((task) => (
-                <TableRow key={task.id}>
-                  <TableCell>{task.id}</TableCell>
-                  <TableCell>{task.url}</TableCell>
-                  <TableCell>{formatDate(task.startTime)}</TableCell>
+              {tasks.map((task) => (
+                <TableRow key={task.task_id}>
+                  <TableCell>{task.task_id.substring(0, 8)}...</TableCell>
+                  <TableCell>
+                    <Tooltip title={task.url}>
+                      <span>{task.url.length > 30 ? `${task.url.substring(0, 30)}...` : task.url}</span>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell>{formatDate(task.start_time)}</TableCell>
                   <TableCell>{getStatusChip(task.status)}</TableCell>
                   <TableCell>
-                    <Tooltip title={`Maximum limit: ${task.maxPages} pages`}>
-                      <span>{task.pagesIndexed} / {task.maxPages}</span>
+                    <Tooltip title={task.stats?.max_pages ? `Maximum limit: ${task.stats.max_pages} pages` : ''}>
+                      <span>
+                        {task.stats?.pages_indexed !== undefined 
+                          ? `${task.stats.pages_indexed} ${task.stats.max_pages ? `/ ${task.stats.max_pages}` : ''}`
+                          : 'N/A'
+                        }
+                      </span>
                     </Tooltip>
                   </TableCell>
                   <TableCell>
                     <Button
                       component={RouterLink}
-                      to={`/task/${task.id}`}
+                      to={`/task/${task.task_id}`}
                       variant="outlined"
                       size="small"
                     >
@@ -136,7 +163,7 @@ const TasksPage: React.FC = () => {
                   </TableCell>
                 </TableRow>
               ))}
-              {mockTasks.length === 0 && (
+              {!loading && tasks.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} align="center">
                     No tasks found. Start a new crawl to see results here.
