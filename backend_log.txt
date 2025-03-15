@@ -1,0 +1,12 @@
+No processes found using port 8000
+Using mock crawler implementation
+Loaded 10 tasks from filesystem
+Starting Docu Eater API server on http://0.0.0.0:8000...
+INFO:     Started server process [21549]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [21549]

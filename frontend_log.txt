@@ -1,0 +1,9 @@
+
+> docu-eater-frontend@0.1.0 start
+> PORT=3000 BROWSER=none HOST=localhost react-scripts start
+
+Attempting to bind to HOST environment variable: localhost
+If this was unintentional, check that you haven't mistakenly set it in your shell.
+Learn more here: https://cra.link/advanced-config
+
+Something is already running on port 3000.
